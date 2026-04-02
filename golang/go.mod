@@ -1,4 +1,4 @@
-module "github.com/7574-sistemas-distribuidos/tp-mom/golang"
+module github.com/7574-sistemas-distribuidos/tp-mom/golang
 
 go 1.24.1
 
