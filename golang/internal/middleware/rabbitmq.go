@@ -12,6 +12,10 @@ import (
 type rabbitMiddleware struct {
 	conn *amqp.Connection
 	ch   *amqp.Channel
+}
+
+type exchangeMiddleware struct {
+	*rabbitMiddleware
 
 	exchange string
 	keys     []string
@@ -19,11 +23,32 @@ type rabbitMiddleware struct {
 	queueName string
 }
 
-func (r *rabbitMiddleware) StartConsuming(callbackFunc func(msg Message, ack func(), nack func())) error {
-	q, err := r.ch.QueueDeclare(
+type queueMiddleware struct {
+	*rabbitMiddleware
+
+	queueName string
+}
+
+func (r *rabbitMiddleware) consumeLoop(
+	msgs <-chan amqp.Delivery,
+	callbackFunc func(msg Message, ack func(), nack func()),
+) {
+	go func() {
+		for d := range msgs {
+			callbackFunc(
+				Message{Body: string(d.Body)},
+				func() { _ = d.Ack(false) },
+				func() { _ = d.Nack(false, true) },
+			)
+		}
+	}()
+}
+
+func (e *exchangeMiddleware) StartConsuming(callbackFunc func(msg Message, ack func(), nack func())) error {
+	q, err := e.ch.QueueDeclare(
 		"",    // name
 		false, // durability
-		true,  // delete when unused -> cuadno se me desconectan los consumidores, se borra la queue
+		true,  // delete when unused -> cuando se desconectan los consumidores, se borra la queue
 		true,  // exclusive
 		false, // no-wait
 		nil,   // arguments
@@ -32,13 +57,13 @@ func (r *rabbitMiddleware) StartConsuming(callbackFunc func(msg Message, ack fun
 		return mapError(err)
 	}
 
-	r.queueName = q.Name
+	e.queueName = q.Name
 
-	for _, key := range r.keys {
-		err = r.ch.QueueBind(
-			q.Name,     // queue name
-			key,        // routing key
-			r.exchange, // exchange
+	for _, key := range e.keys {
+		err = e.ch.QueueBind(
+			q.Name,
+			key,
+			e.exchange,
 			false,
 			nil,
 		)
@@ -47,7 +72,7 @@ func (r *rabbitMiddleware) StartConsuming(callbackFunc func(msg Message, ack fun
 		}
 	}
 
-	msgs, err := r.ch.Consume(
+	msgs, err := e.ch.Consume(
 		q.Name, //queue
 		"",     // consumer
 		false,  // auto ack -> lo hago manualmente
@@ -60,15 +85,26 @@ func (r *rabbitMiddleware) StartConsuming(callbackFunc func(msg Message, ack fun
 		return mapError(err)
 	}
 
-	go func() {
-		for d := range msgs {
-			callbackFunc(
-				Message{Body: string(d.Body)},
-				func() { _ = d.Ack(false) },
-				func() { _ = d.Nack(false, true) },
-			)
-		}
-	}()
+	e.consumeLoop(msgs, callbackFunc)
+
+	return nil
+}
+
+func (q *queueMiddleware) StartConsuming(callbackFunc func(msg Message, ack func(), nack func())) error {
+	msgs, err := q.ch.Consume(
+		q.queueName, //queue
+		"",          // consumer
+		false,       // auto ack -> lo hago manualmente
+		false,       // exclusive
+		false,       // no local
+		false,       // no wait
+		nil,         // args
+	)
+	if err != nil {
+		return mapError(err)
+	}
+
+	q.consumeLoop(msgs, callbackFunc)
 
 	return nil
 }
@@ -76,29 +112,44 @@ func (r *rabbitMiddleware) StartConsuming(callbackFunc func(msg Message, ack fun
 func (r *rabbitMiddleware) StopConsuming() {
 }
 
-func (r *rabbitMiddleware) Send(msg Message) error {
-	if r.ch == nil {
+func (e *exchangeMiddleware) Send(msg Message) error {
+	if e.ch == nil {
 		return ErrMessageMiddlewareDisconnected
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err := r.ch.PublishWithContext(
+	return e.ch.PublishWithContext(
 		ctx,
-		r.exchange, // exchange
-		r.keys[0],  // routing key
+		e.exchange, // exchange
+		e.keys[0],  // routing key
 		false,      // mandatory
 		false,      // immediate
 		amqp.Publishing{
 			Body: []byte(msg.Body),
 		},
 	)
-	if err != nil {
-		return mapError(err)
+}
+
+func (q *queueMiddleware) Send(msg Message) error {
+	if q.ch == nil {
+		return ErrMessageMiddlewareDisconnected
 	}
 
-	return nil
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	return q.ch.PublishWithContext(
+		ctx,
+		"",          // default exchange
+		q.queueName, // routing key = queue name
+		false,
+		false,
+		amqp.Publishing{
+			Body: []byte(msg.Body),
+		},
+	)
 }
 
 func (r *rabbitMiddleware) Close() error {
@@ -115,7 +166,7 @@ func (r *rabbitMiddleware) Close() error {
 	return nil
 }
 
-func NewRabbitMiddleware(exchange string, keys []string, connectionSettings ConnSettings) (Middleware, error) {
+func CreateExchangeMiddleware(exchange string, keys []string, connectionSettings ConnSettings) (Middleware, error) {
 	conn, err := amqp.Dial(fmt.Sprintf(
 		"amqp://guest:guest@%s:%d/",
 		connectionSettings.Hostname,
@@ -143,11 +194,49 @@ func NewRabbitMiddleware(exchange string, keys []string, connectionSettings Conn
 		return nil, ErrMessageMiddlewareMessage
 	}
 
-	return &rabbitMiddleware{
-		conn:     conn,
-		ch:       ch,
+	return &exchangeMiddleware{
+		rabbitMiddleware: &rabbitMiddleware{
+			conn: conn,
+			ch:   ch,
+		},
 		exchange: exchange,
 		keys:     keys,
+	}, nil
+}
+
+func CreateQueueMiddleware(queueName string, connectionSettings ConnSettings) (Middleware, error) {
+	conn, err := amqp.Dial(fmt.Sprintf(
+		"amqp://guest:guest@%s:%d/",
+		connectionSettings.Hostname,
+		connectionSettings.Port,
+	))
+	if err != nil {
+		return nil, ErrMessageMiddlewareDisconnected
+	}
+
+	ch, err := conn.Channel()
+	if err != nil {
+		return nil, ErrMessageMiddlewareDisconnected
+	}
+
+	_, err = ch.QueueDeclare(
+		queueName,
+		false,
+		false,
+		false,
+		false,
+		nil,
+	)
+	if err != nil {
+		return nil, mapError(err)
+	}
+
+	return &queueMiddleware{
+		rabbitMiddleware: &rabbitMiddleware{
+			conn: conn,
+			ch:   ch,
+		},
+		queueName: queueName,
 	}, nil
 }
 
