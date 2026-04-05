@@ -116,16 +116,27 @@ func (q *queueMiddleware) Send(msg Message) error {
 }
 
 func (r *rabbitMiddleware) Close() error {
+	if err := r.StopConsuming(); err != nil {
+		// TODO: preguntar al profe que error es resoluble y que no.
+		if err != ErrMessageMiddlewareDisconnected {
+			return ErrMessageMiddlewareClose
+		}
+	}
+
 	if r.ch != nil {
-		if err := r.ch.Close(); err != nil {
+		if err := r.ch.Close(); err != nil { // seguro sea error interno no resoluble
 			return ErrMessageMiddlewareClose
 		}
+		r.ch = nil
 	}
+
 	if r.conn != nil {
-		if err := r.conn.Close(); err != nil {
+		if err := r.conn.Close(); err != nil { // seguro sea error interno no resoluble
 			return ErrMessageMiddlewareClose
 		}
+		r.conn = nil
 	}
+
 	return nil
 }
 
