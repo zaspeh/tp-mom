@@ -108,7 +108,14 @@ func (e *exchangeMiddleware) Send(msg Message) error {
 		return ErrMessageMiddlewareMessage
 	}
 
-	return sendWithContext(e.ch, e.exchange, e.keys[0], msg)
+	for _, key := range e.keys { // uso todas las llaves que tengo
+		err := sendWithContext(e.ch, e.exchange, key, msg)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (q *queueMiddleware) Send(msg Message) error {
@@ -233,7 +240,8 @@ func sendWithContext(ch *amqp.Channel, exchange, routingKey string, msg Message)
 		false,      // mandatory
 		false,      // immediate
 		amqp.Publishing{
-			Body: []byte(msg.Body),
+			ContentType: "text/plain", // entiendo que es más correcto añadir el tipo de contenido
+			Body:        []byte(msg.Body),
 		},
 	)
 
