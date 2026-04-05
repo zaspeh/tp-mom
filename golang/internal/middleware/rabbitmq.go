@@ -14,6 +14,8 @@ type rabbitMiddleware struct {
 	ch   *amqp.Channel
 
 	consumerTag string
+	cancelFunc  context.CancelFunc
+	queueName   string
 }
 
 type exchangeMiddleware struct {
@@ -21,14 +23,10 @@ type exchangeMiddleware struct {
 
 	exchange string
 	keys     []string
-
-	queueName string
 }
 
 type queueMiddleware struct {
 	*rabbitMiddleware
-
-	queueName string
 }
 
 func (e *exchangeMiddleware) StartConsuming(callbackFunc func(msg Message, ack func(), nack func())) error {
@@ -82,10 +80,29 @@ func (q *queueMiddleware) StartConsuming(callbackFunc func(msg Message, ack func
 	return nil
 }
 
-func (r *rabbitMiddleware) StopConsuming() {
+func (r *rabbitMiddleware) StopConsuming() error {
+	if r.ch != nil && r.consumerTag != "" {
+		err := r.ch.Cancel(r.consumerTag, false)
+		r.consumerTag = ""
+		if err != nil {
+			return mapError(err)
+		}
+	}
+
+	if r.cancelFunc != nil {
+		r.cancelFunc()
+		r.cancelFunc = nil
+	}
+
+	return nil
 }
 
 func (e *exchangeMiddleware) Send(msg Message) error {
+	// debería haber una routing key
+	if len(e.keys) == 0 {
+		return ErrMessageMiddlewareMessage
+	}
+
 	return sendWithContext(e.ch, e.exchange, e.keys[0], msg)
 }
 
@@ -176,10 +193,10 @@ func CreateQueueMiddleware(queueName string, connectionSettings ConnSettings) (M
 
 	return &queueMiddleware{
 		rabbitMiddleware: &rabbitMiddleware{
-			conn: conn,
-			ch:   ch,
+			conn:      conn,
+			ch:        ch,
+			queueName: queueName,
 		},
-		queueName: queueName,
 	}, nil
 }
 
@@ -193,7 +210,7 @@ func sendWithContext(ch *amqp.Channel, exchange, routingKey string, msg Message)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	return ch.PublishWithContext(
+	err := ch.PublishWithContext(
 		ctx,
 		exchange,   // exchange
 		routingKey, // routing key
@@ -203,20 +220,31 @@ func sendWithContext(ch *amqp.Channel, exchange, routingKey string, msg Message)
 			Body: []byte(msg.Body),
 		},
 	)
+
+	if err != nil {
+		return mapError(err)
+	}
+	return nil
 }
 
 func (r *rabbitMiddleware) consumeWithTag(queueName string) (<-chan amqp.Delivery, error) {
 	tag := fmt.Sprintf("consumer-%d", time.Now().UnixNano())
 	r.consumerTag = tag
 
+	// con esto le digo a rabbitMQ que no le de más de un mensaje a los trabajadores al mismo tiempo. (cuando lo procese luego le envío otro)
+	err := r.ch.Qos(1, 0, false)
+	if err != nil {
+		return nil, mapError(err)
+	}
+
 	msgs, err := r.ch.Consume(
-		queueName, //queue
-		tag,       // consumer
-		false,     // auto ack -> lo hago manualmente
-		false,     // exclusive
-		false,     // no local
-		false,     // no wait
-		nil,       // args
+		queueName,
+		tag,
+		false,
+		false,
+		false,
+		false,
+		nil,
 	)
 
 	return msgs, err
@@ -226,13 +254,21 @@ func (r *rabbitMiddleware) consumeLoop(
 	msgs <-chan amqp.Delivery,
 	callbackFunc func(msg Message, ack func(), nack func()),
 ) {
+	ctx, cancel := context.WithCancel(context.Background())
+	r.cancelFunc = cancel
+
 	go func() {
 		for d := range msgs {
-			callbackFunc(
-				Message{Body: string(d.Body)},
-				func() { _ = d.Ack(false) },
-				func() { _ = d.Nack(false, true) },
-			)
+			select {
+			case <-ctx.Done(): // si se cerró la comunicación...
+				return
+			default:
+				callbackFunc(
+					Message{Body: string(d.Body)},
+					func() { _ = d.Ack(false) },
+					func() { _ = d.Nack(false, true) },
+				)
+			}
 		}
 	}()
 }
