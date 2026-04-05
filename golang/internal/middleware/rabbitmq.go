@@ -81,6 +81,11 @@ func (q *queueMiddleware) StartConsuming(callbackFunc func(msg Message, ack func
 }
 
 func (r *rabbitMiddleware) StopConsuming() error {
+	// Si no hay channel, probablemente ya esté desconectado
+	if r.ch == nil {
+		return ErrMessageMiddlewareDisconnected
+	}
+
 	if r.ch != nil && r.consumerTag != "" {
 		err := r.ch.Cancel(r.consumerTag, false)
 		r.consumerTag = ""
