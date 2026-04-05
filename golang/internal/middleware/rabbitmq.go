@@ -250,6 +250,8 @@ func (r *rabbitMiddleware) consumeWithTag(queueName string) (<-chan amqp.Deliver
 	return msgs, err
 }
 
+// Se usa select en lugar de "range msgs" para poder cancelar el consumo
+// mediante el contexto -> "range" podía bloquearse esperando mensajes
 func (r *rabbitMiddleware) consumeLoop(
 	msgs <-chan amqp.Delivery,
 	callbackFunc func(msg Message, ack func(), nack func()),
@@ -258,11 +260,16 @@ func (r *rabbitMiddleware) consumeLoop(
 	r.cancelFunc = cancel
 
 	go func() {
-		for d := range msgs {
+		for {
 			select {
 			case <-ctx.Done(): // si se cerró la comunicación...
 				return
-			default:
+
+			case d, ok := <-msgs: // esto me permite iterar los mensajes
+				if !ok {
+					return
+				}
+
 				callbackFunc(
 					Message{Body: string(d.Body)},
 					func() { _ = d.Ack(false) },
