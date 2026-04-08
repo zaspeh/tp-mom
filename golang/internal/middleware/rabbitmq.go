@@ -32,6 +32,10 @@ type queueMiddleware struct {
 }
 
 func (e *exchangeMiddleware) StartConsuming(callbackFunc func(msg Message, ack func(), nack func())) error {
+	if e.ch == nil {
+		return ErrMessageMiddlewareDisconnected
+	}
+
 	q, err := e.ch.QueueDeclare(
 		"",    // name
 		false, // durability
@@ -42,9 +46,6 @@ func (e *exchangeMiddleware) StartConsuming(callbackFunc func(msg Message, ack f
 	)
 	if err != nil {
 		return mapError(err)
-	}
-	if e.ch == nil {
-		return ErrMessageMiddlewareDisconnected
 	}
 
 	e.queueName = q.Name
@@ -91,7 +92,7 @@ func (r *rabbitMiddleware) StopConsuming() error {
 		return ErrMessageMiddlewareDisconnected
 	}
 
-	if r.ch != nil && r.consumerTag != "" {
+	if r.consumerTag != "" {
 		err := r.ch.Cancel(r.consumerTag, false)
 		r.consumerTag = ""
 		if err != nil {
@@ -162,6 +163,7 @@ func CreateExchangeMiddleware(exchange string, keys []string, connectionSettings
 
 	ch, err := conn.Channel()
 	if err != nil {
+		conn.Close()
 		return nil, ErrMessageMiddlewareDisconnected
 	}
 
@@ -197,6 +199,7 @@ func CreateQueueMiddleware(queueName string, connectionSettings ConnSettings) (M
 
 	ch, err := conn.Channel()
 	if err != nil {
+		conn.Close()
 		return nil, ErrMessageMiddlewareDisconnected
 	}
 
@@ -250,6 +253,10 @@ func sendWithContext(ch *amqp.Channel, exchange, routingKey string, msg Message)
 }
 
 func (r *rabbitMiddleware) consumeWithTag(queueName string) (<-chan amqp.Delivery, error) {
+	if r.ch == nil {
+		return nil, ErrMessageMiddlewareDisconnected
+	}
+
 	tag := fmt.Sprintf("consumer-%d", time.Now().UnixNano())
 	r.consumerTag = tag
 
@@ -272,8 +279,6 @@ func (r *rabbitMiddleware) consumeWithTag(queueName string) (<-chan amqp.Deliver
 	return msgs, err
 }
 
-// Se usa select en lugar de "range msgs" para poder cancelar el consumo
-// mediante el contexto -> "range" podía bloquearse esperando mensajes
 func (r *rabbitMiddleware) consumeLoop(
 	msgs <-chan amqp.Delivery,
 	callbackFunc func(msg Message, ack func(), nack func()),
