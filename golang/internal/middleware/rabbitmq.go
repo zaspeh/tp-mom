@@ -286,25 +286,23 @@ func (r *rabbitMiddleware) consumeLoop(
 	ctx, cancel := context.WithCancel(context.Background())
 	r.cancelFunc = cancel
 
-	go func() {
-		for {
-			select {
-			case <-ctx.Done(): // si se cerró la comunicación...
+	for {
+		select {
+		case <-ctx.Done(): // si se cerró la comunicación...
+			return
+
+		case d, ok := <-msgs: // esto me permite iterar los mensajes
+			if !ok {
 				return
-
-			case d, ok := <-msgs: // esto me permite iterar los mensajes
-				if !ok {
-					return
-				}
-
-				callbackFunc(
-					Message{Body: string(d.Body)},
-					func() { _ = d.Ack(false) },
-					func() { _ = d.Nack(false, true) },
-				)
 			}
+
+			callbackFunc(
+				Message{Body: string(d.Body)},
+				func() { _ = d.Ack(false) },
+				func() { _ = d.Nack(false, true) },
+			)
 		}
-	}()
+	}
 }
 
 func mapError(err error) error {
