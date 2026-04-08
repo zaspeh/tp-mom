@@ -90,7 +90,7 @@ func (r *rabbitMiddleware) StopConsuming() error {
 		err := r.ch.Cancel(r.consumerTag, false)
 		r.consumerTag = ""
 		if err != nil {
-			return mapError(err)
+			return ErrMessageMiddlewareDisconnected
 		}
 	}
 
@@ -123,28 +123,27 @@ func (q *queueMiddleware) Send(msg Message) error {
 }
 
 func (r *rabbitMiddleware) Close() error {
-	if err := r.StopConsuming(); err != nil {
-		// TODO: preguntar al profe que error es resoluble y que no.
-		if err != ErrMessageMiddlewareDisconnected {
-			return ErrMessageMiddlewareClose
-		}
-	}
+	// no chequeo el error porque el único error que puede devolver (por contrato) es que el cliente se
+	// desconectó, eso no debería ser un problema para liberar el resto de recursos
+	r.StopConsuming()
+
+	var closeErr error = nil
 
 	if r.ch != nil {
 		if err := r.ch.Close(); err != nil { // seguro sea error interno no resoluble
-			return ErrMessageMiddlewareClose
+			closeErr = ErrMessageMiddlewareClose
 		}
 		r.ch = nil
 	}
 
 	if r.conn != nil {
 		if err := r.conn.Close(); err != nil { // seguro sea error interno no resoluble
-			return ErrMessageMiddlewareClose
+			closeErr = ErrMessageMiddlewareClose
 		}
 		r.conn = nil
 	}
 
-	return nil
+	return closeErr
 }
 
 // CONSTRUCTORES
@@ -240,7 +239,7 @@ func sendWithContext(ch *amqp.Channel, exchange, routingKey string, msg Message)
 		false,      // mandatory
 		false,      // immediate
 		amqp.Publishing{
-			ContentType: "text/plain", // entiendo que es más correcto añadir el tipo de contenido
+			ContentType: "text/plain",
 			Body:        []byte(msg.Body),
 		},
 	)
