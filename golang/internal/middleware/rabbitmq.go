@@ -299,8 +299,6 @@ func (r *rabbitMiddleware) consumeLoop(
 			)
 		}
 	}
-
-	return nil
 }
 
 func mapError(err error) error {
