@@ -69,9 +69,7 @@ func (e *exchangeMiddleware) StartConsuming(callbackFunc func(msg Message, ack f
 		return mapError(err)
 	}
 
-	e.consumeLoop(msgs, callbackFunc)
-
-	return nil
+	return e.consumeLoop(msgs, callbackFunc)
 }
 
 func (q *queueMiddleware) StartConsuming(callbackFunc func(msg Message, ack func(), nack func())) error {
@@ -81,9 +79,7 @@ func (q *queueMiddleware) StartConsuming(callbackFunc func(msg Message, ack func
 		return mapError(err)
 	}
 
-	q.consumeLoop(msgs, callbackFunc)
-
-	return nil
+	return q.consumeLoop(msgs, callbackFunc)
 }
 
 func (r *rabbitMiddleware) StopConsuming() error {
@@ -282,18 +278,18 @@ func (r *rabbitMiddleware) consumeWithTag(queueName string) (<-chan amqp.Deliver
 func (r *rabbitMiddleware) consumeLoop(
 	msgs <-chan amqp.Delivery,
 	callbackFunc func(msg Message, ack func(), nack func()),
-) {
+) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	r.cancelFunc = cancel
 
 	for {
 		select {
 		case <-ctx.Done(): // si se cerró la comunicación...
-			return
+			return nil
 
 		case d, ok := <-msgs: // esto me permite iterar los mensajes
 			if !ok {
-				return
+				return ErrMessageMiddlewareDisconnected
 			}
 
 			callbackFunc(
@@ -303,6 +299,8 @@ func (r *rabbitMiddleware) consumeLoop(
 			)
 		}
 	}
+
+	return nil
 }
 
 func mapError(err error) error {
