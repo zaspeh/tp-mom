@@ -9,6 +9,8 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
+const TRIES_TO_CONNECT = 10
+
 type rabbitMiddleware struct {
 	conn *amqp.Connection
 	ch   *amqp.Channel
@@ -40,6 +42,9 @@ func (e *exchangeMiddleware) StartConsuming(callbackFunc func(msg Message, ack f
 	)
 	if err != nil {
 		return mapError(err)
+	}
+	if e.ch == nil {
+		return ErrMessageMiddlewareDisconnected
 	}
 
 	e.queueName = q.Name
@@ -149,11 +154,8 @@ func (r *rabbitMiddleware) Close() error {
 // CONSTRUCTORES
 
 func CreateExchangeMiddleware(exchange string, keys []string, connectionSettings ConnSettings) (Middleware, error) {
-	conn, err := amqp.Dial(fmt.Sprintf(
-		"amqp://guest:guest@%s:%d/",
-		connectionSettings.Hostname,
-		connectionSettings.Port,
-	))
+	url := fmt.Sprintf("amqp://guest:guest@%s:%d/", connectionSettings.Hostname, connectionSettings.Port)
+	conn, err := dialWithRetry(url, TRIES_TO_CONNECT)
 	if err != nil {
 		return nil, ErrMessageMiddlewareDisconnected
 	}
@@ -187,11 +189,8 @@ func CreateExchangeMiddleware(exchange string, keys []string, connectionSettings
 }
 
 func CreateQueueMiddleware(queueName string, connectionSettings ConnSettings) (Middleware, error) {
-	conn, err := amqp.Dial(fmt.Sprintf(
-		"amqp://guest:guest@%s:%d/",
-		connectionSettings.Hostname,
-		connectionSettings.Port,
-	))
+	url := fmt.Sprintf("amqp://guest:guest@%s:%d/", connectionSettings.Hostname, connectionSettings.Port)
+	conn, err := dialWithRetry(url, TRIES_TO_CONNECT)
 	if err != nil {
 		return nil, ErrMessageMiddlewareDisconnected
 	}
@@ -311,4 +310,19 @@ func mapError(err error) error {
 		return ErrMessageMiddlewareDisconnected
 	}
 	return ErrMessageMiddlewareMessage
+}
+
+func dialWithRetry(url string, retries int) (*amqp.Connection, error) {
+	var conn *amqp.Connection
+	var err error
+
+	for i := 0; i < retries; i++ {
+		conn, err = amqp.Dial(url)
+		if err == nil {
+			return conn, nil
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	return nil, ErrMessageMiddlewareDisconnected
 }
