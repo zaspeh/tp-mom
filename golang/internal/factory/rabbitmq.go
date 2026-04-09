@@ -1,4 +1,4 @@
-package middleware
+package factory
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	m "github.com/7574-sistemas-distribuidos/tp-mom/golang/internal/middleware"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -31,9 +32,9 @@ type queueMiddleware struct {
 	*rabbitMiddleware
 }
 
-func (e *exchangeMiddleware) StartConsuming(callbackFunc func(msg Message, ack func(), nack func())) error {
+func (e *exchangeMiddleware) StartConsuming(callbackFunc func(msg m.Message, ack func(), nack func())) error {
 	if e.ch == nil {
-		return ErrMessageMiddlewareDisconnected
+		return m.ErrMessageMiddlewareDisconnected
 	}
 
 	q, err := e.ch.QueueDeclare(
@@ -72,7 +73,7 @@ func (e *exchangeMiddleware) StartConsuming(callbackFunc func(msg Message, ack f
 	return e.consumeLoop(msgs, callbackFunc)
 }
 
-func (q *queueMiddleware) StartConsuming(callbackFunc func(msg Message, ack func(), nack func())) error {
+func (q *queueMiddleware) StartConsuming(callbackFunc func(msg m.Message, ack func(), nack func())) error {
 	msgs, err := q.consumeWithTag(q.queueName)
 
 	if err != nil {
@@ -85,14 +86,14 @@ func (q *queueMiddleware) StartConsuming(callbackFunc func(msg Message, ack func
 func (r *rabbitMiddleware) StopConsuming() error {
 	// Si no hay channel, probablemente ya esté desconectado
 	if r.ch == nil {
-		return ErrMessageMiddlewareDisconnected
+		return m.ErrMessageMiddlewareDisconnected
 	}
 
 	if r.consumerTag != "" {
 		err := r.ch.Cancel(r.consumerTag, false)
 		r.consumerTag = ""
 		if err != nil {
-			return ErrMessageMiddlewareDisconnected
+			return m.ErrMessageMiddlewareDisconnected
 		}
 	}
 
@@ -104,10 +105,10 @@ func (r *rabbitMiddleware) StopConsuming() error {
 	return nil
 }
 
-func (e *exchangeMiddleware) Send(msg Message) error {
+func (e *exchangeMiddleware) Send(msg m.Message) error {
 	// debería haber una routing key
 	if len(e.keys) == 0 {
-		return ErrMessageMiddlewareMessage
+		return m.ErrMessageMiddlewareMessage
 	}
 
 	for _, key := range e.keys { // uso todas las llaves que tengo
@@ -120,7 +121,7 @@ func (e *exchangeMiddleware) Send(msg Message) error {
 	return nil
 }
 
-func (q *queueMiddleware) Send(msg Message) error {
+func (q *queueMiddleware) Send(msg m.Message) error {
 	return sendWithContext(q.ch, "", q.queueName, msg)
 }
 
@@ -133,14 +134,14 @@ func (r *rabbitMiddleware) Close() error {
 
 	if r.ch != nil {
 		if err := r.ch.Close(); err != nil { // seguro sea error interno no resoluble
-			closeErr = ErrMessageMiddlewareClose
+			closeErr = m.ErrMessageMiddlewareClose
 		}
 		r.ch = nil
 	}
 
 	if r.conn != nil {
 		if err := r.conn.Close(); err != nil { // seguro sea error interno no resoluble
-			closeErr = ErrMessageMiddlewareClose
+			closeErr = m.ErrMessageMiddlewareClose
 		}
 		r.conn = nil
 	}
@@ -148,83 +149,11 @@ func (r *rabbitMiddleware) Close() error {
 	return closeErr
 }
 
-// CONSTRUCTORES
-
-func CreateExchangeMiddleware(exchange string, keys []string, connectionSettings ConnSettings) (Middleware, error) {
-	url := fmt.Sprintf("amqp://guest:guest@%s:%d/", connectionSettings.Hostname, connectionSettings.Port)
-	conn, err := dialWithRetry(url, TRIES_TO_CONNECT)
-	if err != nil {
-		return nil, ErrMessageMiddlewareDisconnected
-	}
-
-	ch, err := conn.Channel()
-	if err != nil {
-		conn.Close()
-		return nil, ErrMessageMiddlewareDisconnected
-	}
-
-	err = ch.ExchangeDeclare(
-		exchange, // name
-		"direct", // type
-		false,    // durability -> si se reinicia rabbit, el exchange sigue existiendo
-		false,    // auto-deleted
-		false,    // internal
-		false,    // no-wait
-		nil,      // arguments
-	)
-	if err != nil {
-		return nil, ErrMessageMiddlewareMessage
-	}
-
-	return &exchangeMiddleware{
-		rabbitMiddleware: &rabbitMiddleware{
-			conn: conn,
-			ch:   ch,
-		},
-		exchange: exchange,
-		keys:     keys,
-	}, nil
-}
-
-func CreateQueueMiddleware(queueName string, connectionSettings ConnSettings) (Middleware, error) {
-	url := fmt.Sprintf("amqp://guest:guest@%s:%d/", connectionSettings.Hostname, connectionSettings.Port)
-	conn, err := dialWithRetry(url, TRIES_TO_CONNECT)
-	if err != nil {
-		return nil, ErrMessageMiddlewareDisconnected
-	}
-
-	ch, err := conn.Channel()
-	if err != nil {
-		conn.Close()
-		return nil, ErrMessageMiddlewareDisconnected
-	}
-
-	_, err = ch.QueueDeclare(
-		queueName,
-		false,
-		false,
-		false,
-		false,
-		nil,
-	)
-	if err != nil {
-		return nil, mapError(err)
-	}
-
-	return &queueMiddleware{
-		rabbitMiddleware: &rabbitMiddleware{
-			conn:      conn,
-			ch:        ch,
-			queueName: queueName,
-		},
-	}, nil
-}
-
 // FUNCIONES AUXILIARES
 
-func sendWithContext(ch *amqp.Channel, exchange, routingKey string, msg Message) error {
+func sendWithContext(ch *amqp.Channel, exchange, routingKey string, msg m.Message) error {
 	if ch == nil {
-		return ErrMessageMiddlewareDisconnected
+		return m.ErrMessageMiddlewareDisconnected
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -250,7 +179,7 @@ func sendWithContext(ch *amqp.Channel, exchange, routingKey string, msg Message)
 
 func (r *rabbitMiddleware) consumeWithTag(queueName string) (<-chan amqp.Delivery, error) {
 	if r.ch == nil {
-		return nil, ErrMessageMiddlewareDisconnected
+		return nil, m.ErrMessageMiddlewareDisconnected
 	}
 
 	tag := fmt.Sprintf("consumer-%d", time.Now().UnixNano())
@@ -277,7 +206,7 @@ func (r *rabbitMiddleware) consumeWithTag(queueName string) (<-chan amqp.Deliver
 
 func (r *rabbitMiddleware) consumeLoop(
 	msgs <-chan amqp.Delivery,
-	callbackFunc func(msg Message, ack func(), nack func()),
+	callbackFunc func(msg m.Message, ack func(), nack func()),
 ) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	r.cancelFunc = cancel
@@ -289,11 +218,11 @@ func (r *rabbitMiddleware) consumeLoop(
 
 		case d, ok := <-msgs: // esto me permite iterar los mensajes
 			if !ok {
-				return ErrMessageMiddlewareDisconnected
+				return m.ErrMessageMiddlewareDisconnected
 			}
 
 			callbackFunc(
-				Message{Body: string(d.Body)},
+				m.Message{Body: string(d.Body)},
 				func() { _ = d.Ack(false) },
 				func() { _ = d.Nack(false, true) },
 			)
@@ -306,9 +235,9 @@ func mapError(err error) error {
 		return nil
 	}
 	if errors.Is(err, amqp.ErrClosed) {
-		return ErrMessageMiddlewareDisconnected
+		return m.ErrMessageMiddlewareDisconnected
 	}
-	return ErrMessageMiddlewareMessage
+	return m.ErrMessageMiddlewareMessage
 }
 
 func dialWithRetry(url string, retries int) (*amqp.Connection, error) {
@@ -323,5 +252,5 @@ func dialWithRetry(url string, retries int) (*amqp.Connection, error) {
 		time.Sleep(2 * time.Second)
 	}
 
-	return nil, ErrMessageMiddlewareDisconnected
+	return nil, err
 }
