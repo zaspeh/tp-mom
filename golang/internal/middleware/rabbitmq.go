@@ -166,7 +166,7 @@ func CreateExchangeMiddleware(exchange string, keys []string, connectionSettings
 	err = ch.ExchangeDeclare(
 		exchange, // name
 		"direct", // type
-		true,     // durability -> si se reinicia rabbit, el exchange sigue existiendo
+		false,    // durability -> si se reinicia rabbit, el exchange sigue existiendo
 		false,    // auto-deleted
 		false,    // internal
 		false,    // no-wait
