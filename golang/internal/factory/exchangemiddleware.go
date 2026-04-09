@@ -27,8 +27,8 @@ func (e *exchangeMiddleware) StartConsuming(callbackFunc func(msg m.Message, ack
 	q, err := e.ch.QueueDeclare(
 		"",    // name
 		false, // durability
-		false, // delete when unused -> cuando se desconectan los consumidores, se borra la queue
-		false, // exclusive
+		true,  // delete when unused -> cuando se desconectan los consumidores, se borra la queue
+		true,  // exclusive
 		false, // no-wait
 		nil,   // arguments
 	)
