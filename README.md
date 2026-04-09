@@ -39,3 +39,9 @@ Instalar los dependencias de la suite de pruebas:
 Instalar una versión de Golang superior a `1.24`.
 Instalar los dependencias de la suite de pruebas:
 `go mod download`
+
+Algunas aclaraciones:
+* A la hora de enviar mensajes, el contexto permite un máximo de 5 segundos para poder ejecutar 'PublishWitchContext'. (se decidieron 5 segundos debido a que en la documentación de RabbitMQ donde se utilizan 5 segundos también.)
+* Al conectarse con RabbitMQ 'ampq.Dial(...)', reintenta conectarse 10 (esto está fijado en la variable global TRIES_TO_CONNECT) veces cada 2 segundos antes de lanzar error por desconexión.
+* Si StartConsuming es invocado más de una vez sobre la misma instancia, el consumerTag anterior se sobrescribe, lo que implica que no podrá cancelarse posteriormente mediante StopConsuming. Este comportamiento no está controlado actualmente y se asume un único consumidor por instancia.
+* Las colas y exchanges se configuran con durability = false, lo que implica que no se persisten en disco. Esto fue decidido asumiendo que la persistencia de mensajes no es un requerimiento.
