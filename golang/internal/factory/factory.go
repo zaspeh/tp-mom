@@ -6,6 +6,8 @@ import (
 	m "github.com/7574-sistemas-distribuidos/tp-mom/golang/internal/middleware"
 )
 
+const TRIES_TO_CONNECT = 10
+
 func CreateQueueMiddleware(queueName string, connectionSettings m.ConnSettings) (m.Middleware, error) {
 	url := fmt.Sprintf("amqp://guest:guest@%s:%d/", connectionSettings.Hostname, connectionSettings.Port)
 	conn, err := dialWithRetry(url, TRIES_TO_CONNECT)
@@ -32,11 +34,9 @@ func CreateQueueMiddleware(queueName string, connectionSettings m.ConnSettings) 
 	}
 
 	return &queueMiddleware{
-		rabbitMiddleware: &rabbitMiddleware{
-			conn:      conn,
-			ch:        ch,
-			queueName: queueName,
-		},
+		conn:      conn,
+		ch:        ch,
+		queueName: queueName,
 	}, nil
 }
 
@@ -67,12 +67,10 @@ func CreateExchangeMiddleware(exchange string, keys []string, connectionSettings
 	}
 
 	return &exchangeMiddleware{
-		rabbitMiddleware: &rabbitMiddleware{
-			conn:      conn,
-			ch:        ch,
-			queueName: "",
-		},
-		exchange: exchange,
-		keys:     keys,
+		conn:      conn,
+		ch:        ch,
+		queueName: "",
+		exchange:  exchange,
+		keys:      keys,
 	}, nil
 }
